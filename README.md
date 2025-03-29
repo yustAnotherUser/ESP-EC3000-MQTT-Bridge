@@ -7,7 +7,7 @@ Receives EC3000 packets and decodes them via a RFM69 connected to an ESP8266/ESP
 
 MQTT Struktur:<br>
 EC3000/debug		-> Removing stale ID (Durch fehlerhafte Pakete werden evtl. IDs erkannt die es nicht gibt welche aber sofort einen Platz im internen Tracker einnehmen.
-                                     Wenn innerhalb von 12 Sekunden die ID _nicht_ nochmal empfangen wurde wird sie wieder von der internen Trackerliste gelöscht)<br>
+                                     Wenn innerhalb von 66 Sekunden die ID _nicht_ nochmal empfangen wurde wird sie wieder von der internen Trackerliste gelöscht)<br>
 EC3000/debug		-> Discarded (gefolgt von mindestens einer der folgenden Möglichkeiten)<br>
 														OnSeconds > TotalSeconds;<br>
 														IsOn=No but Power>0;<br>
