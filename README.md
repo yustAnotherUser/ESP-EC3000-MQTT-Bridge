@@ -6,7 +6,7 @@ Receives EC3000 pakets and decodes them via a RFM69 connected to an ESP8266/ESP3
 !! Ihr müsst eure WLAN und MQTT Daten im Quellcode eingeben !!
 
 MQTT Struktur:<br>
-EC3000/debug		-> Removing stale ID (Durch fehlerhafte Packete werden evtl. IDs erkannt die es nicht gibt aber sofort einen Platz im internen Tracker einnehmen.
+EC3000/debug		-> Removing stale ID (Durch fehlerhafte Pakete werden evtl. IDs erkannt die es nicht gibt aber sofort einen Platz im internen Tracker einnehmen.
                                      Wenn nach 12 Sekunden die ID nicht nochmal empfangen wurde wird sie von der internen Trackerliste gelöscht)<br>
 EC3000/debug		-> Discarded (gefolgt von mindestens einer der folgenden Möglichkeiten)<br>
 														OnSeconds > TotalSeconds;<br>
@@ -20,8 +20,8 @@ EC3000/debug		-> IsOn=No but Power>0; Power too high; Resets not +1 (last=2050);
 EC3000/[ID]<br>
 EC3000/1234			-> {"TotalSeconds":693790,"OnSeconds":85,"Consumption":0.000,"Power":0.0,"MaximumPower":11.3,"NumberOfResets":3,"IsOn":0,"CRC":"0x7514","RSSI":-72.00}<br>
 <br>
-Jedes Packet wird einer Plausibilitätsüberprüfung unterzogen bevor es an MQTT geleitet wird.
-Die Packete werden verworfen wenn eine der folgenden Bedingungen zutrifft:
+Jedes Paket wird einer Plausibilitätsüberprüfung unterzogen bevor es an MQTT geleitet wird.
+Die Pakete werden verworfen wenn eine der folgenden Bedingungen zutrifft:
 1. OnSeconds größer TotalSeconds
 2. "IsOn" gleich "No" aber Power über 0
 3. Strom zu hoch (aktuell 2000 Watt)
@@ -33,5 +33,5 @@ Die Packete werden verworfen wenn eine der folgenden Bedingungen zutrifft:
 NOTES/TODO:
 Der RSSI Wert ist immer gleich...
 
-QUELLEN: (EC3000 Packetverarbeitung und dazugehörige RFM69 Initialisierung)
+QUELLEN: (EC3000 Paketverarbeitung und dazugehörige RFM69 Initialisierung)
 https://github.com/Rainerlan/LaCrosseGatewayMQTT
