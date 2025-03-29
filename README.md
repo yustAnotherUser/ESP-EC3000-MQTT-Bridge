@@ -1,13 +1,13 @@
 # ESP-EC3000-MQTT-Bridge
 Empfängt EC3000-Pakete und dekodiert sie über einen RFM69, der mit einem ESP8266/ESP32 verbunden ist, und sendet sie nach einigen Plausibilitätsprüfungen an MQTT.
 ---
-Receives EC3000 pakets and decodes them via a RFM69 connected to an ESP8266/ESP32 and sends them to MQTT after some sanity checks.
+Receives EC3000 packets and decodes them via a RFM69 connected to an ESP8266/ESP32 and sends them to MQTT after some sanity checks.
 
 !! Ihr müsst eure WLAN und MQTT Daten im Quellcode eingeben !!
 
 MQTT Struktur:<br>
-EC3000/debug		-> Removing stale ID (Durch fehlerhafte Pakete werden evtl. IDs erkannt die es nicht gibt aber sofort einen Platz im internen Tracker einnehmen.
-                                     Wenn nach 12 Sekunden die ID nicht nochmal empfangen wurde wird sie von der internen Trackerliste gelöscht)<br>
+EC3000/debug		-> Removing stale ID (Durch fehlerhafte Pakete werden evtl. IDs erkannt die es nicht gibt welche aber sofort einen Platz im internen Tracker einnehmen.
+                                     Wenn innerhalb von 12 Sekunden die ID _nicht_ nochmal empfangen wurde wird sie wieder von der internen Trackerliste gelöscht)<br>
 EC3000/debug		-> Discarded (gefolgt von mindestens einer der folgenden Möglichkeiten)<br>
 														OnSeconds > TotalSeconds;<br>
 														IsOn=No but Power>0;<br>
