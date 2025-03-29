@@ -1,7 +1,7 @@
 # ESP-EC3000-MQTT-Bridge
 Empfängt EC3000-Pakete und dekodiert sie über einen RFM69, der mit einem ESP8266/ESP32 verbunden ist, und sendet sie nach einigen Plausibilitätsprüfungen an MQTT.
 ---
-Receives EC3000 packets and decodes them via a RFM69 connected to an ESP8266/ESP32 and sends them to MQTT after some sanity checks.
+Receives EC3000 pakets and decodes them via a RFM69 connected to an ESP8266/ESP32 and sends them to MQTT after some sanity checks.
 
 !! Ihr müsst eure WLAN und MQTT Daten im Quellcode eingeben !!
 
@@ -33,3 +33,5 @@ Die Packete werden verworfen wenn eine der folgenden Bedingungen zutrifft:
 NOTES/TODO:
 Der RSSI Wert ist immer gleich...
 
+QUELLEN: (EC3000 Packetverarbeitung und dazugehörige RFM69 Initialisierung)
+https://github.com/Rainerlan/LaCrosseGatewayMQTT
