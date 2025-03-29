@@ -272,7 +272,7 @@ bool updateResetTracker(uint16_t id, uint16_t resets, double consumption, uint16
 void cleanStaleIDs() {
   unsigned long now = millis();
   for (int i = 0; i < MAX_IDS; i++) {
-    if (resetTrackers[i].Initialized && (now - resetTrackers[i].LastSeen > 12000)) {
+    if (resetTrackers[i].Initialized && (now - resetTrackers[i].LastSeen > 66000)) { // behalte die IDs länger um Probleme mit echten IDs zu vermeiden die aus welchen Gründen auch immer nicht regelmässig empfangen werden.
       Serial.print("Removing stale ID: 0x"); Serial.println(resetTrackers[i].ID, HEX);
       client.publish("EC3000/debug", "Removing stale ID");
       resetTrackers[i].Initialized = false; // Mark as free
