@@ -63,6 +63,9 @@ struct ResetTracker {
 WiFiClient espClient;
 PubSubClient client(espClient);
 
+// Track which IDs have had discovery messages sent
+bool discoverySent[MAX_IDS] = {0};
+
 void WriteReg(uint8_t addr, uint8_t value) {
   digitalWrite(RFM69_CS, LOW);
   SPI.transfer(addr | 0x80);
@@ -82,7 +85,7 @@ uint8_t GetByteFromFifo() {
   return ReadReg(0x00);
 }
 
-// EC3000 decoding functions
+// EC3000 decoding functions (unchanged)
 void DescramblePayload(byte* payload) {
   byte ctr = PAYLOAD_SIZE;
   uint8_t inpbyte, outbyte = 0;
@@ -198,6 +201,103 @@ void DecodeFrame(byte *payload, struct Frame *frame) {
   frame->Reception = 0;
 }
 
+// New function to publish Home Assistant discovery messages
+void publishDiscoveryMessages(uint16_t id) {
+  char device_id[16];
+  snprintf(device_id, sizeof(device_id), "ec3000_%04X", id);
+  char state_topic[32];
+  snprintf(state_topic, sizeof(state_topic), "EC3000/%04X", id);
+
+  // Device info shared across all entities
+  String device_info = "{\"identifiers\": [\"" + String(device_id) + "\"],"
+                       "\"name\": \"EC3000 Device " + String(id, HEX) + "\","
+                       "\"manufacturer\": \"DIY\","
+                       "\"model\": \"EC3000 Energy Monitor\"}";
+
+  // Power sensor
+  char power_topic[64];
+  snprintf(power_topic, sizeof(power_topic), "homeassistant/sensor/%s/power/config", device_id);
+  String power_payload = "{\"name\": \"Power\","
+                         "\"state_topic\": \"" + String(state_topic) + "\","
+                         "\"unit_of_measurement\": \"W\","
+                         "\"value_template\": \"{{ value_json.Power }}\","
+                         "\"device\": " + device_info + "}";
+  client.publish(power_topic, power_payload.c_str(), true);
+
+  // Consumption sensor
+  char consumption_topic[64];
+  snprintf(consumption_topic, sizeof(consumption_topic), "homeassistant/sensor/%s/consumption/config", device_id);
+  String consumption_payload = "{\"name\": \"Consumption\","
+                               "\"state_topic\": \"" + String(state_topic) + "\","
+                               "\"unit_of_measurement\": \"kWh\","
+                               "\"value_template\": \"{{ value_json.Consumption }}\","
+                               "\"device\": " + device_info + "}";
+  client.publish(consumption_topic, consumption_payload.c_str(), true);
+
+  // Total Seconds sensor
+  char total_seconds_topic[64];
+  snprintf(total_seconds_topic, sizeof(total_seconds_topic), "homeassistant/sensor/%s/total_seconds/config", device_id);
+  String total_seconds_payload = "{\"name\": \"Total Seconds\","
+                                 "\"state_topic\": \"" + String(state_topic) + "\","
+                                 "\"unit_of_measurement\": \"s\","
+                                 "\"value_template\": \"{{ value_json.TotalSeconds }}\","
+                                 "\"device\": " + device_info + "}";
+  client.publish(total_seconds_topic, total_seconds_payload.c_str(), true);
+
+  // On Seconds sensor
+  char on_seconds_topic[64];
+  snprintf(on_seconds_topic, sizeof(on_seconds_topic), "homeassistant/sensor/%s/on_seconds/config", device_id);
+  String on_seconds_payload = "{\"name\": \"On Seconds\","
+                              "\"state_topic\": \"" + String(state_topic) + "\","
+                              "\"unit_of_measurement\": \"s\","
+                              "\"value_template\": \"{{ value_json.OnSeconds }}\","
+                              "\"device\": " + device_info + "}";
+  client.publish(on_seconds_topic, on_seconds_payload.c_str(), true);
+
+  // Maximum Power sensor
+  char max_power_topic[64];
+  snprintf(max_power_topic, sizeof(max_power_topic), "homeassistant/sensor/%s/max_power/config", device_id);
+  String max_power_payload = "{\"name\": \"Maximum Power\","
+                             "\"state_topic\": \"" + String(state_topic) + "\","
+                             "\"unit_of_measurement\": \"W\","
+                             "\"value_template\": \"{{ value_json.MaximumPower }}\","
+                             "\"device\": " + device_info + "}";
+  client.publish(max_power_topic, max_power_payload.c_str(), true);
+
+  // Number of Resets sensor
+  char resets_topic[64];
+  snprintf(resets_topic, sizeof(resets_topic), "homeassistant/sensor/%s/resets/config", device_id);
+  String resets_payload = "{\"name\": \"Number of Resets\","
+                          "\"state_topic\": \"" + String(state_topic) + "\","
+                          "\"value_template\": \"{{ value_json.NumberOfResets }}\","
+                          "\"device\": " + device_info + "}";
+  client.publish(resets_topic, resets_payload.c_str(), true);
+
+  // Is On binary sensor
+  char is_on_topic[64];
+  snprintf(is_on_topic, sizeof(is_on_topic), "homeassistant/binary_sensor/%s/is_on/config", device_id);
+  String is_on_payload = "{\"name\": \"Is On\","
+                         "\"state_topic\": \"" + String(state_topic) + "\","
+                         "\"value_template\": \"{{ value_json.IsOn }}\","
+                         "\"payload_on\": \"1\","
+                         "\"payload_off\": \"0\","
+                         "\"device\": " + device_info + "}";
+  client.publish(is_on_topic, is_on_payload.c_str(), true);
+
+  // RSSI sensor
+  char rssi_topic[64];
+  snprintf(rssi_topic, sizeof(rssi_topic), "homeassistant/sensor/%s/rssi/config", device_id);
+  String rssi_payload = "{\"name\": \"RSSI\","
+                        "\"state_topic\": \"" + String(state_topic) + "\","
+                        "\"unit_of_measurement\": \"dBm\","
+                        "\"value_template\": \"{{ value_json.RSSI }}\","
+                        "\"device\": " + device_info + "}";
+  client.publish(rssi_topic, rssi_payload.c_str(), true);
+
+  Serial.print("Published discovery messages for ID: 0x");
+  Serial.println(id, HEX);
+}
+
 void reconnect() {
   while (!client.connected()) {
     Serial.print("Connecting to MQTT...");
@@ -205,6 +305,13 @@ void reconnect() {
     clientId += String(random(0xffff), HEX);
     if (client.connect(clientId.c_str(), mqtt_user, mqtt_password)) {
       Serial.println("connected");
+      // Publish discovery messages for known IDs
+      for (int i = 0; i < MAX_IDS; i++) {
+        if (resetTrackers[i].Initialized && !discoverySent[i]) {
+          publishDiscoveryMessages(resetTrackers[i].ID);
+          discoverySent[i] = true;
+        }
+      }
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -272,10 +379,11 @@ bool updateResetTracker(uint16_t id, uint16_t resets, double consumption, uint16
 void cleanStaleIDs() {
   unsigned long now = millis();
   for (int i = 0; i < MAX_IDS; i++) {
-    if (resetTrackers[i].Initialized && (now - resetTrackers[i].LastSeen > 66000)) { // behalte die IDs länger um Probleme mit echten IDs zu vermeiden die aus welchen Gründen auch immer nicht regelmässig empfangen werden.
+    if (resetTrackers[i].Initialized && (now - resetTrackers[i].LastSeen > 66000)) {
       Serial.print("Removing stale ID: 0x"); Serial.println(resetTrackers[i].ID, HEX);
       client.publish("EC3000/debug", "Removing stale ID");
-      resetTrackers[i].Initialized = false; // Mark as free
+      resetTrackers[i].Initialized = false;
+      discoverySent[i] = false; // Allow rediscovery if ID reappears
     }
   }
 }
@@ -321,15 +429,11 @@ void setup() {
   delay(10);
 
   SPI.begin(RFM69_SCK, RFM69_MISO, RFM69_MOSI, RFM69_CS);
-  // SPI.setClockDivider(SPI_CLOCK_DIV4);
-  // SPI.setDataMode(SPI_MODE0);
   delay(10);
 
   WriteReg(REG_OPMODE, 0x04);
   delay(10);
 
-
-  // Write some random stuff into registers and read it back to verify SPI connection works and we have a RFM60
   WriteReg(REG_PAYLOADLENGTH, 0x0A);
   if (ReadReg(REG_PAYLOADLENGTH) != 0x0A) {
     Serial.println("RFM69 detection failed at step 1!");
@@ -401,7 +505,6 @@ void loop() {
   }
   client.loop();
 
-  // Clean stale IDs every loop (could be optimized with a timer)
   cleanStaleIDs();
 
   if (ReadReg(REG_IRQFLAGS2) & 0x04) {
@@ -423,7 +526,6 @@ void loop() {
 
     float rssi = -(ReadReg(0x27) / 2.0);
 
-    // Sanity checks
     bool valid = true;
     String reason = "";
 
@@ -450,7 +552,6 @@ void loop() {
     } 
     
     if (!updateResetTracker(frame.ID, frame.NumberOfResets, frame.Consumption, &lastResets, &lastConsumption)) {
-      // Consumption check
       double delta = frame.Consumption - lastConsumption;
       if (delta < 0 || delta > 0.025) {
         valid = false;
@@ -458,7 +559,14 @@ void loop() {
       }
     }
 
-    // Logging logic
+    // Publish discovery messages for new IDs
+    for (int i = 0; i < MAX_IDS; i++) {
+      if (resetTrackers[i].Initialized && resetTrackers[i].ID == frame.ID && !discoverySent[i]) {
+        publishDiscoveryMessages(frame.ID);
+        discoverySent[i] = true;
+      }
+    }
+
     if (logOnlyFailed) {
       if (!valid) {
         printFrame(&frame, rssi);
@@ -481,7 +589,6 @@ void loop() {
       Serial.println();
     }
 
-    // MQTT publish only valid packets
     if (valid) {
       char topic[32];
       char payload[256];
