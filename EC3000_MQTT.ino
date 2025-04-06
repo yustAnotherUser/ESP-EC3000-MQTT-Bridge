@@ -544,12 +544,13 @@ void loop() {
       reason += "Power too high; ";
     }
 
-    uint16_t lastResets;
-    double lastConsumption;
-    if (!updateResetTracker(frame.ID, frame.NumberOfResets, frame.Consumption, &lastResets, &lastConsumption)) {
-      valid = false;
-      reason += "Resets not +1 (last=" + String(lastResets) + "); ";
-    } 
+    // Auskommentiert lassen!! Überflüssig und fehleranfällig!
+    // uint16_t lastResets;
+    // double lastConsumption;
+    // if (!updateResetTracker(frame.ID, frame.NumberOfResets, frame.Consumption, &lastResets, &lastConsumption)) {
+    //   valid = false;
+    //   reason += "Resets not +1 (last=" + String(lastResets) + "); ";
+    // } 
     
     if (!updateResetTracker(frame.ID, frame.NumberOfResets, frame.Consumption, &lastResets, &lastConsumption)) {
       double delta = frame.Consumption - lastConsumption;
