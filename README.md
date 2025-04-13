@@ -3,6 +3,18 @@ Empfängt EC3000-Pakete und dekodiert sie über einen RFM69, der mit einem ESP82
 ---
 Receives EC3000 packets and decodes them via a RFM69 connected to an ESP8266/ESP32 and sends them to MQTT after some sanity checks.
 
+Volle Unterstützung des ESP32-C3 mit verbautem 0,42" OLED, der blauen LED und des "BO0"-Tasters mit zwei Funktionen.
+- Kurz drücken: Wechselt zur nächsten ID
+- Länger als halbe Sekunde drücken: Wechselt die Schriftart der Anzeige! (aktuell 37 mehr oder minder zufällig ausgewählte aus den hunderten verfügbaren)
+
+Die LED leuchtet minimal für einen sehr kurzen Zeitraum wenn ein Paket in Ordnung ist und länger und stärker wenn ein Paket nicht in Ordnung ist.
+
+Dass OLED zeigt in drei Zeilen:
+1234 ID
+Ein 1 Pixel breiter horizontaler "Ladebalken" der fünf Sekunden braucht (dass nicht veränderbare Intervall eines Senders zwischen den Paketen) und "neustartet" sobald dass nächste Paket da ist. (Wenn er am Ende stehenbleibt bedeutet das, dass er das nächste Paket komplett verpasst hat und wird daher solange am Ende stehen bis wieder ein Paket eintrifft)
+123,4 W
+12,345 KWH
+
 !! Ihr müsst eure WLAN und MQTT Daten im Quellcode eingeben !!
 
 MQTT Struktur:<br>
@@ -26,12 +38,10 @@ Die Pakete werden verworfen wenn eine der folgenden Bedingungen zutrifft:
 1. OnSeconds größer TotalSeconds
 2. "IsOn" gleich "No" aber Power über 0
 3. Stromverbrauchswert zu hoch (aktuell 3600 Watt)
-4. Stromverbrauchswert höher als maximaler Stromverbrauchswert
-
+4. Stromverbrauchswert höher als maximaler Stromverbrauchswert<br>
 // 5. wenn "Resets" nicht gleich geblieben ist oder es sich anders geändert hat als "+1" (oder auch mal unkontrolliert 256 drauflegt aber nur bis ca. 3900 danach gehts wieder rückwärts in sovielen 256er Schritten //    wie möglich bis der Wert wieder unter 256 ist) (ein Reset ist wenn die Steckdose selbst vom Strom getrennt und wieder verbunden wurde)
 //    (wenn Ihr die Steckdose manuell zurückstellt (5 Sekunden auf die rote LED an der Steckdose drücken bis die LED dauerhaft leuchtet) müsst ihr sogesehen die Bridge auch kurz neustarten 
-//    da damit alle internen Werte der Steckdose auf 0 gesetzt werden und damit dass Tracking für diese ID verwirren würde)
-
+//    da damit alle internen Werte der Steckdose auf 0 gesetzt werden und damit dass Tracking für diese ID verwirren würde)<br>
 6. Wenn "Consumption" stärker gestiegen ist als in fünf Sekunden theoretisch maximal möglich ist (0.025 bei 3600 Watt)
 
 Diese aktuell fünf Checks filtern soweit ich dass beurteilen kann alles raus was fehlerhafte Daten hat.
