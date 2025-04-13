@@ -35,20 +35,22 @@ EC3000/1234			-> {"TotalSeconds":693790,"OnSeconds":85,"Consumption":0.000,"Powe
 Jedes Paket wird einer Plausibilitätsüberprüfung unterzogen bevor es an MQTT geleitet wird.
 Die Pakete werden verworfen wenn eine der folgenden Bedingungen zutrifft:
 
-1. OnSeconds größer TotalSeconds
-2. "IsOn" gleich "No" aber Power über 0
-3. Stromverbrauchswert zu hoch (aktuell 3600 Watt)
-4. Stromverbrauchswert höher als maximaler Stromverbrauchswert<br>
-// 5. wenn "Resets" nicht gleich geblieben ist oder es sich anders geändert hat als "+1" (oder auch mal unkontrolliert 256 drauflegt aber nur bis ca. 3900 danach gehts wieder rückwärts in sovielen 256er Schritten //    wie möglich bis der Wert wieder unter 256 ist) (ein Reset ist wenn die Steckdose selbst vom Strom getrennt und wieder verbunden wurde)
-//    (wenn Ihr die Steckdose manuell zurückstellt (5 Sekunden auf die rote LED an der Steckdose drücken bis die LED dauerhaft leuchtet) müsst ihr sogesehen die Bridge auch kurz neustarten 
-//    da damit alle internen Werte der Steckdose auf 0 gesetzt werden und damit dass Tracking für diese ID verwirren würde)<br>
-6. Wenn "Consumption" stärker gestiegen ist als in fünf Sekunden theoretisch maximal möglich ist (0.025 bei 3600 Watt)
+1. AKTIV: OnSeconds größer TotalSeconds
+2. AKTIV: "IsOn" gleich "No" aber Power über 0
+3. AKTIV: Stromverbrauchswert zu hoch (aktuell 3600 Watt)
+4. AKTIV: Stromverbrauchswert höher als maximaler Stromverbrauchswert<br>
+5. DEAKTIVIERT / TODO: wenn "Resets" nicht gleich geblieben ist oder es sich anders geändert hat als "+1"<br>
+   (oder auch mal unkontrolliert 256 drauflegt aber nur bis ca. 3900 danach gehts wieder rückwärts in sovielen 256er Schritten
+   wie möglich bis der Wert wieder unter 256 ist)<br>
+   (ein Reset ist wenn die Steckdose selbst vom Strom getrennt und wieder damit verbunden wurde z.B. durch ein vorgeschaltetes Funkrelay)<br>
+   (wenn Ihr die Steckdose manuell zurückstellt (5 Sekunden auf die rote LED an der Steckdose drücken bis die LED dauerhaft leuchtet)<br>
+   müsst ihr sogesehen die Bridge auch kurz neustarten da damit alle internen Werte der Steckdose auf 0 gesetzt werden und somit dass Tracking für diese ID verwirren würde)<br>
+6. AKTIV: Wenn "Consumption" stärker gestiegen ist als in fünf Sekunden theoretisch maximal möglich ist (0.025 bei 3600 Watt)
 
-Diese aktuell fünf Checks filtern soweit ich dass beurteilen kann alles raus was fehlerhafte Daten hat.
+Diese aktuell fünf aktiven Checks filtern soweit ich dass aber beurteilen kann bereits alles raus was fehlerhafte Daten hat.
 
 NOTES/TODO:
 // Der RSSI Wert ist immer gleich... - Scheint sich doch mal zu ändern?!
-
 
 QUELLEN:
 EC3000 Paketverarbeitung und dazugehörige RFM69 Initialisierung
