@@ -1,23 +1,51 @@
 #include <SPI.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <U8g2lib.h>
 
-// Pin definitions
-#define RFM69_CS   34  // NSS (Chip Select)
-#define RFM69_INT  5   // DIO0 (Interrupt) NOT USED - you do NOT need to connect it!
-#define RFM69_MOSI 35  // SPI MOSI
-#define RFM69_MISO 37  // SPI MISO
-#define RFM69_SCK  36  // SPI SCK
-#define RFM69_RST  18  // RESET - USED; but it also works without because the RFM69 is in working state when this pin is not connected.
+// benutzte Pins auf ESP32-C3 Board mit 0.42" OLED
+// https://www.aliexpress.com/item/1005008125231916.html
+// oder suche "ESP32-C3 oled 0 42"
+// (nur zur Übersicht; werden später im Code initialisiert)
+//
+// PIN 5 ist SDA; I2C; Display (und evtl. sonstige I2C Sensoren)
+// PIN 6 ist SCL; I2C; Display (und evtl. sonstige I2C Sensoren)
+// PIN 8 ist die LED auf der Platine (blau auf den günstigen AliExpress Boards und an PIN 8; es gibt wohl auch welche mit einer RGB LED an PIN 2?)
+// PIN 9 ist der "BO0" Knopf
 
-#define FREQUENCY_KHZ  868300
-#define DATA_RATE      20000
-#define REG_OPMODE     0x01
-#define REG_PAYLOADLENGTH 0x38
-#define REG_IRQFLAGS2  0x28
+// Pin Definitionen RFM69 (frei wählbar) an ESP32-C3 mit 0,42" OLED
+#define RFM69_CS 7
+#define RFM69_MOSI 3
+#define RFM69_MISO 10
+#define RFM69_SCK 4
+#define RFM69_RST 2
 
+// Hersteller Pin Definitionen 0.42" OLED auf dem günstigen ESP32-C3 Board
+#define OLED_SCL 6  // (fest auf der Platine zum Display verdrahtet)
+#define OLED_SDA 5  // (fest auf der Platine zum Display verdrahtet)
+
+// Hersteller Pin Definitionen der auf dem Board verbauten LED
+#define LED_PIN 8                 // (fest auf der Platine verdrahtet)
+
+// LED Eigenschaften
+#define LED_VALID_DURATION 3      // 3ms for valid packets
+#define LED_INVALID_DURATION 60   // 10ms for invalid packets
+#define LED_VALID_BRIGHTNESS 250  // ~2% brightness for valid (0 = brightest, 255 = off)
+#define LED_INVALID_BRIGHTNESS 0  // Full brightness for invalid
+#define LED_PWM_FREQ 5000         // 5kHz PWM frequency
+#define LED_PWM_RESOLUTION 8      // 8-bit resolution (0-255)
+
+// RFM69 Definitionen
+#define FREQUENCY_KHZ 868300
+#define DATA_RATE 20000
 #define PAYLOAD_SIZE 47
 #define FRAME_LENGTH 38
+
+// Behandlung des "BO0" Knopfes
+#define LONG_PRESS_DURATION 500   // 500ms for font change
+
+// Anzeigelänge des Popups beim Fontwechsel
+#define FONT_POPUP_DURATION 1250  // 1250ms popup with the current font array number
 
 // WiFi and MQTT settings (EDIT THESE)
 const char* ssid = "YOURWIFI";
@@ -27,8 +55,32 @@ const int mqtt_port = 1883;
 const char* mqtt_user = ""; // put your mqtt username here
 const char* mqtt_password = ""; // put your mqtt password here
 
+// Global variables for LED timing
+unsigned long ledValidOnTime = 0;
+unsigned long ledInvalidOnTime = 0;
+bool ledValidIsOn = false;
+bool ledInvalidIsOn = false;
+
+// Fontcounter popup
+unsigned long fontPopupStart = 0;  // Popup timer
+bool showFontPopup = false;        // Popup state
+
+// Display initialization
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE, 6, 5);
+// Display buffer dimensions
+const unsigned int BufferWidth = 132;
+const unsigned int BufferHeight = 64;
+const unsigned int ScreenWidth = 72;
+const unsigned int ScreenHeight = 40;
+const unsigned int xOffset = (BufferWidth - ScreenWidth) / 2;
+const unsigned int yOffset = (BufferHeight - ScreenHeight) / 2;
+
+// Define constants and variables
+const int buttonPin = 9;                  // GPIO pin for the button
+const unsigned long debounceDelay = 250;  // Debounce delay in milliseconds
+
 // Logging toggle
-bool logOnlyFailed = true; // true = log only failed, false = log all
+bool logOnlyFailed = true;  // true = log only failed, false = log all
 
 // Payload buffer
 uint8_t m_payload[64];
@@ -49,20 +101,102 @@ struct Frame {
   uint16_t CRC;
 };
 
-// Reset and Consumption tracking (max 32 devices)
-#define MAX_IDS 32
-struct ResetTracker {
+// Font array (modify as needed)
+// https://github.com/olikraus/u8g2/wiki/fntlist12#u8g2-fonts-capital-a-height-912
+const uint8_t* fonts[] = {
+  // unsorted
+  u8g2_font_ncenB10_tr,            // 0 - NULL !!!
+  u8g2_font_9x6LED_tr,             // 1
+  u8g2_font_spleen5x8_mu,          // 2
+  u8g2_font_NokiaSmallPlain_tf,    // 3
+  u8g2_font_BitTypeWriter_tr,
+  u8g2_font_PixelTheatre_tr,
+  u8g2_font_ImpactBits_tr,
+  u8g2_font_doomalpha04_tr,
+  u8g2_font_busdisplay11x5_tr,
+  u8g2_font_lastapprenticebold_tr,
+  u8g2_font_cube_mel_tr,           // 10
+  u8g2_font_press_mel_tr,
+  u8g2_font_repress_mel_tr,
+  u8g2_font_smart_patrol_nbp_tr,
+  u8g2_font_missingplanet_tr,
+  u8g2_font_ordinarybasis_tr,
+  u8g2_font_questgiver_tr,
+  u8g2_font_seraphimb1_tr,
+  u8g2_font_koleeko_tu,
+  u8g2_font_tenthinguys_tr,
+  u8g2_font_tenthinnerguys_tr,      // 20
+  u8g2_font_8bitclassic_tr,
+  u8g2_font_Terminal_tr,
+  // 10 high
+  u8g2_font_mademoiselle_mel_tr,
+  u8g2_font_pieceofcake_mel_tr,
+  u8g2_font_tenfatguys_tr,
+  u8g2_font_sonicmania_tr,
+  u8g2_font_DigitalDiscoThin_tr,
+  u8g2_font_DigitalDisco_tr,
+  u8g2_font_pxplusibmvga9_tr,
+  // 11 high
+  u8g2_font_michaelmouse_tu,         // 30
+  u8g2_font_squirrel_tr,
+  u8g2_font_fewture_tr,
+  u8g2_font_adventurer_tr,
+  u8g2_font_Pixellari_tr,
+  // 12 high
+  u8g2_font_cupcakemetoyourleader_tr,
+  u8g2_font_heavybottom_tr,
+  u8g2_font_12x6LED_tr,              // 37
+};
+const uint8_t numFonts = sizeof(fonts) / sizeof(fonts[0]);
+
+// Reset and Consumption tracking (max 64 devices)
+// designers note: make this far bigger as you have real IDs. like 15-20 times. you never know how bad your packet gets messed up in transmission and how many false IDs you may receive in a very short amount of time which would clog up the tracking if this is way to low...
+// keep in mind IDs that are not re-received within 132 seconds will be removed from the list anyways (as they are most likely false anyways) to keep it from the otherwise unevitable long time clog up.
+#define MAX_IDS 96
+struct Tracker {
   uint16_t ID;
   uint16_t LastResets;
   double LastConsumption;
   bool Initialized;
-  unsigned long LastSeen; // Timestamp in milliseconds
-} resetTrackers[MAX_IDS] = {0};
+  unsigned long LastSeen;  // Timestamp in milliseconds
+} trackers[MAX_IDS] = { 0 };
 
 // WiFi and MQTT clients
 WiFiClient espClient;
 PubSubClient client(espClient);
 
+// Display page management
+struct DisplayPage {
+  uint16_t ID;
+  float Power;
+  double Consumption;
+  unsigned long lastUpdate;
+  bool active;
+};
+
+DisplayPage displayPages[MAX_IDS];
+uint8_t currentPage = 0;
+uint8_t totalPages = 0;
+
+// Fontswitching
+uint8_t currentFontIndex = 0;        // Start with first font
+unsigned long buttonPressStart = 0;  // Track press start time
+bool buttonIsPressed = false;        // Track press state
+
+// Variables to track button state and timing
+bool lastButtonState = HIGH;         // Previous state of the button (HIGH due to INPUT_PULLUP)
+bool currentButtonState = HIGH;      // Current state of the button
+unsigned long lastDebounceTime = 0;  // Last time the button state changed
+
+void debugLog(const String& msg) {
+  // TODO: Make it actually worship the login bool more as it currently is a bit messy in the console.... :/
+  Serial.println(msg);
+  if (client.connected()) {
+    client.publish("EC3000/debug", msg.c_str(), true);
+  }
+}
+
+// RFM69 Register Magic
 void WriteReg(uint8_t addr, uint8_t value) {
   digitalWrite(RFM69_CS, LOW);
   SPI.transfer(addr | 0x80);
@@ -114,7 +248,7 @@ byte Count1bits(uint32_t v) {
   return c;
 }
 
-uint16_t ShiftReverse(byte *payload) {
+uint16_t ShiftReverse(byte* payload) {
   byte rblen = 47;
   uint16_t i, ec3klen;
   uint16_t crc;
@@ -131,7 +265,7 @@ uint16_t ShiftReverse(byte *payload) {
   return crc;
 }
 
-void ShiftLeft(byte * payload, byte blen, byte shift) {
+void ShiftLeft(byte* payload, byte blen, byte shift) {
   uint8_t offs, bits, slen, i;
   uint16_t wbuf;
 
@@ -147,7 +281,7 @@ void ShiftLeft(byte * payload, byte blen, byte shift) {
   payload[slen] = wbuf << (uint8_t)(8 - bits);
 }
 
-void Del0BitsAndRevBits(byte * payload, byte blen) {
+void Del0BitsAndRevBits(byte* payload, byte blen) {
   uint8_t sval, dval, bit;
   uint8_t si, sbi, di, dbi, n1bits;
 
@@ -174,14 +308,14 @@ void Del0BitsAndRevBits(byte * payload, byte blen) {
   if (dbi) payload[di] = dval >> (uint8_t)(8 - dbi);
 }
 
-void DecodeFrame(byte *payload, struct Frame *frame) {
+void DecodeFrame(byte* payload, struct Frame* frame) {
   DescramblePayload(payload);
   frame->CRC = ShiftReverse(payload);
-  
+
   frame->ID = (payload[0] << 8) | payload[1];
   frame->TotalSeconds = (uint32_t)payload[29] << 20 | (uint32_t)payload[30] << 12 | (uint32_t)payload[2] << 8 | (uint32_t)payload[3];
   frame->OnSeconds = (uint32_t)payload[35] << 20 | (uint32_t)payload[36] << 12 | (uint32_t)payload[6] << 8 | (uint32_t)payload[7];
-  
+
   uint64_t cons = 0;
   cons |= payload[14];
   cons |= (uint16_t)payload[13] << 8;
@@ -201,7 +335,7 @@ void DecodeFrame(byte *payload, struct Frame *frame) {
 void reconnect() {
   while (!client.connected()) {
     Serial.print("Connecting to MQTT...");
-    String clientId = "ESP32C3-EC3000-";
+    String clientId = "ESP-EC3000-";
     clientId += String(random(0xffff), HEX);
     if (client.connect(clientId.c_str(), mqtt_user, mqtt_password)) {
       Serial.println("connected");
@@ -231,76 +365,287 @@ void printTimeBreakdown(uint32_t seconds) {
   Serial.print(minutes), Serial.print("m)");
 }
 
-bool updateResetTracker(uint16_t id, uint16_t resets, double consumption, uint16_t* lastResets, double* lastConsumption) {
+bool checkResets(uint16_t id, uint16_t resets, uint16_t* lastResets) {
+  // TODO: Does not work reliably AND WILL CAUSE MISSING DATA AT SOME POINT AND THEN FOREVER because of weird jumps the EC3000 makes sometimes.
+  // !! Make sure the Sanity check later is a comment (//) so this will not be used !!
   unsigned long now = millis();
   for (int i = 0; i < MAX_IDS; i++) {
-    if (resetTrackers[i].Initialized && resetTrackers[i].ID == id) {
-      *lastResets = resetTrackers[i].LastResets;
-      *lastConsumption = resetTrackers[i].LastConsumption;
-      if (resets == resetTrackers[i].LastResets || resets == resetTrackers[i].LastResets + 1) {
-        resetTrackers[i].LastResets = resets;
-        resetTrackers[i].LastConsumption = consumption;
-        resetTrackers[i].LastSeen = now;
-        Serial.print("Tracker Update: ID=0x"); Serial.print(id, HEX);
-        Serial.print(", Resets="); Serial.print(resets);
-        Serial.print(", Cons="); Serial.println(consumption, 3);
+    if (trackers[i].Initialized && trackers[i].ID == id) {
+      *lastResets = trackers[i].LastResets;
+      if (resets == trackers[i].LastResets || resets == trackers[i].LastResets + 1) {
+        trackers[i].LastResets = resets;
+        trackers[i].LastSeen = now;
+        debugLog("Resets OK: ID=0x" + String(id, HEX) + ", Resets=" + String(resets));
         return true;
       }
-      Serial.print("Tracker Failed (Resets): ID=0x"); Serial.print(id, HEX);
-      Serial.print(", Expected="); Serial.print(*lastResets + 1);
-      Serial.print(", Got="); Serial.println(resets);
+      debugLog("Resets Failed: ID=0x" + String(id, HEX) + ", Expected=" + String(*lastResets + 1) + ", Got=" + String(resets));
+      trackers[i].LastSeen = now;
       return false;
     }
-    if (!resetTrackers[i].Initialized) {
-      resetTrackers[i].ID = id;
-      resetTrackers[i].LastResets = resets;
-      resetTrackers[i].LastConsumption = consumption;
-      resetTrackers[i].Initialized = true;
-      resetTrackers[i].LastSeen = now;
+    if (!trackers[i].Initialized) {
+      trackers[i].ID = id;
+      trackers[i].LastResets = resets;
+      trackers[i].LastConsumption = 0.0;
+      trackers[i].Initialized = true;
+      trackers[i].LastSeen = now;
       *lastResets = resets;
-      *lastConsumption = consumption;
-      Serial.print("Tracker Init: ID=0x"); Serial.print(id, HEX);
-      Serial.print(", Resets="); Serial.print(resets);
-      Serial.print(", Cons="); Serial.println(consumption, 3);
+      debugLog("Resets Init: ID=0x" + String(id, HEX) + ", Resets=" + String(resets));
       return true;
     }
   }
-  Serial.println("Too many IDs! Increase MAX_IDS.");
+  debugLog("Too many IDs! Increase MAX_IDS.");
   return false;
+}
+
+bool checkConsumption(uint16_t id, double consumption, double* lastConsumption) {
+  // Rewritten - version 2
+  unsigned long now = millis();
+  for (int i = 0; i < MAX_IDS; i++) {
+    if (trackers[i].Initialized && trackers[i].ID == id) {
+      *lastConsumption = trackers[i].LastConsumption;
+      double delta = consumption - *lastConsumption;
+      if (!trackers[i].LastConsumption) {
+        trackers[i].LastConsumption = consumption;
+        trackers[i].LastSeen = now;
+        debugLog("Cons Init: ID=0x" + String(id, HEX) + ", Cons=" + String(consumption, 3));
+        return true;
+      }
+      if (delta == 0) {  // Nur wenn Delta gleich Null ist, ist es "OK"
+        debugLog("Cons Same: ID=0x" + String(id, HEX) + ", Last=" + String(*lastConsumption, 3) + ", New=" + String(consumption, 3) + ", Delta=" + String(delta, 3));
+        trackers[i].LastSeen = now;
+        trackers[i].LastConsumption = consumption;  // Aktualisiere auch den letzten Verbrauch
+        return true;
+      }
+      if (delta < 0) {
+        debugLog("Cons Invalid: ID=0x" + String(id, HEX) + ", Last=" + String(*lastConsumption, 3) + ", New=" + String(consumption, 3) + ", Delta=" + String(delta, 3));
+        trackers[i].LastSeen = now;
+        return false;  // Negative Änderung ist ungültig
+      }
+      if (delta > 0.025) {
+        debugLog("Cons Failed: ID=0x" + String(id, HEX) + ", Last=" + String(*lastConsumption, 3) + ", New=" + String(consumption, 3) + ", Delta=" + String(delta, 3));
+        trackers[i].LastSeen = now;
+        return false;
+      }
+      trackers[i].LastConsumption = consumption;
+      trackers[i].LastSeen = now;
+      debugLog("Cons OK: ID=0x" + String(id, HEX) + ", Cons=" + String(consumption, 3));
+      return true;
+    }
+  }
+  for (int i = 0; i < MAX_IDS; i++) {
+    if (!trackers[i].Initialized) {
+      trackers[i].ID = id;
+      trackers[i].LastResets = 0;
+      trackers[i].LastConsumption = consumption;
+      trackers[i].Initialized = true;
+      trackers[i].LastSeen = now;
+      *lastConsumption = consumption;
+      debugLog("Cons Fallback Init: ID=0x" + String(id, HEX) + ", Cons=" + String(consumption, 3));
+      return true;
+    }
+  }
+  return false;
+}
+
+void updateDisplayPage(uint16_t id, float power, double consumption) {
+  unsigned long now = millis();
+
+  // Find existing page or create new
+  for (int i = 0; i < MAX_IDS; i++) {
+    if (displayPages[i].active && displayPages[i].ID == id) {
+      displayPages[i].Power = power;
+      displayPages[i].Consumption = consumption;
+      displayPages[i].lastUpdate = now;
+      return;
+    }
+  }
+
+  // Create new page if space available
+  for (int i = 0; i < MAX_IDS; i++) {
+    if (!displayPages[i].active) {
+      displayPages[i].ID = id;
+      displayPages[i].Power = power;
+      displayPages[i].Consumption = consumption;
+      displayPages[i].lastUpdate = now;
+      displayPages[i].active = true;
+      totalPages++;
+      return;
+    }
+  }
+}
+
+void drawDisplay() {
+  u8g2.clearBuffer();
+  if (showFontPopup && millis() - fontPopupStart < FONT_POPUP_DURATION) {
+    // Popup: show font index only
+    u8g2.setFont(u8g2_font_fub30_tn);  // Large numeric font (~30px)
+    char popup[3];
+    snprintf(popup, sizeof(popup), "%d", currentFontIndex);
+    int width = u8g2.getStrWidth(popup);
+    int height = u8g2.getFontAscent() - u8g2.getFontDescent();
+    int x = xOffset + (ScreenWidth - width) / 2;    // Center horizontally
+    int y = yOffset + (ScreenHeight - height) / 2;  // Center vertically
+    u8g2.setCursor(x, y);
+    u8g2.print(popup);
+    Serial.println("Drawing popup: " + String(popup));
+  } else {
+    // Normal display
+    showFontPopup = false;  // Hide popup after 3s
+    u8g2.setFont(fonts[currentFontIndex]);
+    if (totalPages == 0) {
+      u8g2.setCursor(xOffset, yOffset);
+      u8g2.print("...");  // Show that we are still Waiting for the very first packets ... only seen at system startup until the first packet comes in
+    } else {
+      // Find the actual page index
+      int displayIndex = 0;
+      for (int i = 0, count = 0; i < MAX_IDS; i++) {
+        if (displayPages[i].active) {
+          if (count == currentPage) {
+            displayIndex = i;
+            break;
+          }
+          count++;
+        }
+      }
+      // Calculate loading bar progress (5 seconds total)
+      unsigned long elapsed = millis() - displayPages[displayIndex].lastUpdate;
+      int barWidth = (elapsed * ScreenWidth) / 5000;
+      if (barWidth > ScreenWidth) {
+        barWidth = ScreenWidth;
+      }
+
+      // Draw content with current font
+      u8g2.setFont(fonts[currentFontIndex]);
+      char buffer[20];
+
+      // ID
+      snprintf(buffer, sizeof(buffer), "%04X ID", displayPages[displayIndex].ID);
+      u8g2.setCursor(xOffset, yOffset);
+      u8g2.print(buffer);
+
+      // Loading bar
+      u8g2.drawHLine(xOffset, yOffset + 13, barWidth);
+
+      // Power
+      snprintf(buffer, sizeof(buffer), "%.1f W", displayPages[displayIndex].Power);
+      u8g2.setCursor(xOffset, yOffset + 14);
+      u8g2.print(buffer);
+
+      // Consumption
+      snprintf(buffer, sizeof(buffer), "%.3f KWH", displayPages[displayIndex].Consumption);
+      u8g2.setCursor(xOffset, yOffset + 28);
+      u8g2.print(buffer);
+    }
+  }
+  u8g2.sendBuffer();
+}
+
+void handleButton() {
+  int reading = digitalRead(buttonPin);
+  // Serial.print("Button reading: ");
+  // Serial.println(reading); // Show the button state (must be "1" !!!)
+
+  if (reading == LOW && lastButtonState == HIGH) {
+    // Button just pressed
+    buttonPressStart = millis();
+    buttonIsPressed = true;
+    Serial.println("Button pressed - starting timer");
+  } else if (reading == HIGH && lastButtonState == LOW) {
+    // Button released
+    unsigned long pressDuration = millis() - buttonPressStart;
+    buttonIsPressed = false;
+    if (pressDuration < LONG_PRESS_DURATION) {
+      // Short press: cycle page
+      if (totalPages > 0) {
+        currentPage = (currentPage + 1) % totalPages;
+        Serial.println("Short press - Cycling to page: " + String(currentPage));
+        drawDisplay();
+      } else {
+        Serial.println("Short press - No pages to cycle");
+      }
+    }
+    Serial.println("Button released - duration: " + String(pressDuration) + "ms");
+  } else if (buttonIsPressed && reading == LOW) {
+    // Button held
+    unsigned long pressDuration = millis() - buttonPressStart;
+    if (pressDuration >= LONG_PRESS_DURATION) {
+      // Long press: cycle font
+      currentFontIndex = (currentFontIndex + 1) % numFonts;
+      fontPopupStart = millis();
+      showFontPopup = true;
+      Serial.println("Long press - Cycling to font index: " + String(currentFontIndex));
+      drawDisplay();
+      buttonIsPressed = false;  // Prevent repeat triggers
+    }
+  }
+  lastButtonState = reading;
 }
 
 void cleanStaleIDs() {
   unsigned long now = millis();
   for (int i = 0; i < MAX_IDS; i++) {
-    if (resetTrackers[i].Initialized && (now - resetTrackers[i].LastSeen > 66000)) { // behalte die IDs länger um Probleme mit echten IDs zu vermeiden die aus welchen Gründen auch immer nicht regelmässig empfangen werden.
-      Serial.print("Removing stale ID: 0x"); Serial.println(resetTrackers[i].ID, HEX);
-      client.publish("EC3000/debug", "Removing stale ID");
-      resetTrackers[i].Initialized = false; // Mark as free
+    if (trackers[i].Initialized && (now - trackers[i].LastSeen > 66000)) {
+      debugLog("Removing stale ID: " + String(trackers[i].ID, HEX));
+      trackers[i].Initialized = false;
+      // Also remove from display pages
+      for (int j = 0; j < MAX_IDS; j++) {
+        if (displayPages[j].active && displayPages[j].ID == trackers[i].ID) {
+          displayPages[j].active = false;
+          totalPages--;
+          if (currentPage >= totalPages && totalPages > 0) {
+            currentPage = totalPages - 1;
+          }
+          break;
+        }
+      }
     }
   }
 }
 
 void printFrame(struct Frame* frame, float rssi) {
-  Serial.print("RSSI: "); Serial.print(rssi); Serial.println(" dBm");
-  Serial.print("ID: 0x"); Serial.println(frame->ID, HEX);
-  Serial.print("Total Seconds: "); Serial.print(frame->TotalSeconds);
-  printTimeBreakdown(frame->TotalSeconds);
-  Serial.println();
-  Serial.print("On Seconds: "); Serial.print(frame->OnSeconds);
-  printTimeBreakdown(frame->OnSeconds);
-  Serial.println();
-  Serial.print("Consumption: "); Serial.print(frame->Consumption); Serial.println(" kWh");
-  Serial.print("Power: "); Serial.print(frame->Power); Serial.println(" W");
-  Serial.print("Max Power: "); Serial.print(frame->MaximumPower); Serial.println(" W");
-  Serial.print("Resets: "); Serial.println(frame->NumberOfResets);
-  Serial.print("Is On: "); Serial.println(frame->IsOn ? "Yes" : "No");
-  Serial.print("CRC: 0x"); Serial.println(frame->CRC, HEX);
+  Serial.printf("ID: %08lX | RSSI: %6.1f dBm | Total: %08lu | On: %08lu | Cons: %06.3f kWh | Power: %05.1f W | Max: %05.1f W | Resets: %04u | On?: %s | CRC: 0x%04X\n",
+                frame->ID,
+                rssi,
+                frame->TotalSeconds,
+                frame->OnSeconds,
+                frame->Consumption,
+                frame->Power,
+                frame->MaximumPower,
+                frame->NumberOfResets,
+                frame->IsOn ? "Yes" : "No",
+                frame->CRC);
 }
 
 void setup() {
+  // Initialize display
+  u8g2.begin();
+  // u8g2.setFont(u8g2_font_8bitclassic_tr); // Set a readable font
+  u8g2.setFont(u8g2_font_missingplanet_tr);
+  // u8g2.setFont(u8g2_font_questgiver_tr);
+  // u8g2.setFont(u8g2_font_crox1tb_tr);
+  // u8g2.setFont(u8g2_font_lastapprenticethin_tr);
+  // u8g2.setFont(u8g2_font_eckpixel_tr);
+  // u8g2.setFont(u8g2_font_tenthinnerguys_tr);
+  // u8g2.setFont(u8g2_font_NokiaSmallBold_tr);
+  // u8g2.setFontRefHeightExtendedText();
+  u8g2.setDrawColor(1);
+  u8g2.setBusClock(25000000);
+  u8g2.setFontPosTop();
+  u8g2.setContrast(255);
+  // u8g2.setFontDirection(0);
+  u8g2.clearBuffer();
+  u8g2.setCursor(xOffset, yOffset);
+  u8g2.print("EC3000 MQTT Bridge");
+  u8g2.sendBuffer();
+
+  // Configure LED PWM with new ESP-IDE > v3 API (in short: it's now ledcAttach instead of ledcAttachSetup and ledcAttachPin)
+  pinMode(LED_PIN, OUTPUT);
+  ledcAttach(LED_PIN, LED_PWM_FREQ, LED_PWM_RESOLUTION);  // Auto-assigns channel
+  ledcWrite(LED_PIN, 255);                                // Off for active-low
+
   Serial.begin(115200);
-  while (!Serial) delay(10);
-  delay(2000);
+  // while (!Serial) delay(10); // umstritten
+  delay(1125);  // einfacher und zuverlässiger
 
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -308,9 +653,13 @@ void setup() {
     Serial.print(".");
   }
   Serial.println("\nWiFi connected");
+  u8g2.setCursor(xOffset, yOffset + 14);
+  u8g2.print("WLAN verbunden!");
+  u8g2.sendBuffer();
 
   client.setServer(mqtt_server, mqtt_port);
 
+  // Reset RFM69 ... if you don't have the cable connected to the RFM69 RESET pin it doesn't matter because it works anyways
   pinMode(RFM69_CS, OUTPUT);
   digitalWrite(RFM69_CS, HIGH);
 
@@ -320,37 +669,60 @@ void setup() {
   digitalWrite(RFM69_RST, LOW);
   delay(10);
 
-  SPI.begin(RFM69_SCK, RFM69_MISO, RFM69_MOSI, RFM69_CS);
-  // SPI.setClockDivider(SPI_CLOCK_DIV4);
-  // SPI.setDataMode(SPI_MODE0);
-  delay(10);
+  // Add button pin setup
+  pinMode(buttonPin, INPUT_PULLUP);  // Configure Button Pin with internal pull-up resistor
 
-  WriteReg(REG_OPMODE, 0x04);
-  delay(10);
-
-
-  // Write some random stuff into registers and read it back to verify SPI connection works and we have a RFM60
-  WriteReg(REG_PAYLOADLENGTH, 0x0A);
-  if (ReadReg(REG_PAYLOADLENGTH) != 0x0A) {
-    Serial.println("RFM69 detection failed at step 1!");
-    while (1);
+  // Initialize display pages
+  for (int i = 0; i < MAX_IDS; i++) {
+    displayPages[i].active = false;
   }
-  WriteReg(REG_PAYLOADLENGTH, 0x40);
-  if (ReadReg(REG_PAYLOADLENGTH) != 0x40) {
+
+  SPI.begin(RFM69_SCK, RFM69_MISO, RFM69_MOSI, RFM69_CS);
+  // SPI.setClockDivider(SPI_CLOCK_DIV4); // 4x lower speed
+  // SPI.setDataMode(SPI_MODE0); // set the standard mode explicitly
+  delay(10);
+
+  // put RFM69 in standby
+  WriteReg(0x01, 0x04);
+  delay(10);
+
+  // Perform some register writes, read it back and compare the values to confirm we have an RFM69.
+  WriteReg(0x38, 0x0A);
+  if (ReadReg(0x38) != 0x0A) {
+    Serial.println("RFM69 detection failed at step 1!");
+    u8g2.setCursor(xOffset, yOffset + 14);
+    u8g2.print("No RFM69");
+    u8g2.setCursor(xOffset, yOffset + 28);
+    u8g2.print("found!!");
+    u8g2.sendBuffer();
+    while (1)
+      ;
+  }
+  WriteReg(0x38, 0x40);
+  if (ReadReg(0x38) != 0x40) {
     Serial.println("RFM69 detection failed at step 2!");
-    while (1);
+    u8g2.setCursor(xOffset, yOffset + 14);
+    u8g2.print("No RFM69");
+    u8g2.setCursor(xOffset, yOffset + 28);
+    u8g2.print("found!!");
+    u8g2.sendBuffer();
+    while (1)
+      ;
   }
   Serial.println("RFM69 detected!");
 
+  // Set RFM69 Frequency to 868.3 MhZ
   unsigned long f = (((FREQUENCY_KHZ * 1000UL) << 2) / (32000000UL >> 11)) << 6;
   WriteReg(0x07, f >> 16);
   WriteReg(0x08, f >> 8);
   WriteReg(0x09, f);
 
+  // Set RFM69 Datarate to 20000 baud (20kbps)
   uint16_t r = ((32000000UL + (DATA_RATE / 2)) / DATA_RATE);
   WriteReg(0x03, r >> 8);
   WriteReg(0x04, r & 0xFF);
 
+  // Set EC3000 Preamble Bytes and Modulation and so on...
   WriteReg(0x02, 0x00);
   WriteReg(0x05, 0x01);
   WriteReg(0x06, 0x48);
@@ -372,11 +744,16 @@ void setup() {
   WriteReg(0x3D, 0x12);
   WriteReg(0x6F, 0x30);
 
-  WriteReg(REG_OPMODE, (ReadReg(REG_OPMODE) & 0xE3) | 0x10);
+  // put RFM69 finally in listening mode!
+  WriteReg(0x01, (ReadReg(0x01) & 0xE3) | 0x10);
 
   Serial.println("RFM69 initialized successfully!");
   client.publish("EC3000/debug", "EC3000 MQTT Bridge initialized successfully!");
+  u8g2.setCursor(xOffset, yOffset + 28);
+  u8g2.print("Found RFM69");
+  u8g2.sendBuffer();
 
+  //Read back the register values and show the just set Frequency and Baudrate (this is/was for debug)
   uint8_t reg07 = ReadReg(0x07);
   uint8_t reg08 = ReadReg(0x08);
   uint8_t reg09 = ReadReg(0x09);
@@ -393,6 +770,9 @@ void setup() {
   Serial.print(" MHz with ");
   Serial.print(bitrate);
   Serial.println(" kbps...");
+  u8g2.setFont(u8g2_font_smart_patrol_nbp_tr);  // Set a readable font
+  // u8g2.setFont(u8g2_font_tenfatguys_tr);
+  delay(2750);
 }
 
 void loop() {
@@ -401,10 +781,10 @@ void loop() {
   }
   client.loop();
 
-  // Clean stale IDs every loop (could be optimized with a timer)
   cleanStaleIDs();
+  handleButton();
 
-  if (ReadReg(REG_IRQFLAGS2) & 0x04) {
+  if (ReadReg(0x28) & 0x04) {
     m_payloadPointer = 0;
     for (int i = 0; i < 64; i++) {
       uint8_t bt = GetByteFromFifo();
@@ -434,29 +814,32 @@ void loop() {
 
     if (!frame.IsOn && frame.Power != 0) {
       valid = false;
-      reason += "IsOn=No but Power>0; ";
+      reason += "IsOn=No aber Power>0; ";
     }
 
-    if (frame.Power > 2000) {
+    if (frame.Power > 3600) {
       valid = false;
-      reason += "Power too high; ";
+      reason += "Power > 3600W; ";
     }
 
-    // The Reset does more complex things than that for unknown reasons but it's not really worth it messing around with it because all bad packets are sorted out with the other checks already.
+    if (frame.Power > frame.MaximumPower) {
+      valid = false;
+      reason += "Power > MaximumPower; ";
+    }
+
+    // !!!!   DON'T USE THIS  !!!!
+    // TODO
+    //
     // uint16_t lastResets;
-    // double lastConsumption;
-    // if (!updateResetTracker(frame.ID, frame.NumberOfResets, frame.Consumption, &lastResets, &lastConsumption)) {
+    // if (!checkResets(frame.ID, frame.NumberOfResets, &lastResets)) {
     //   valid = false;
-    //   reason += "Resets not +1 (last=" + String(lastResets) + "); ";
-    // } 
-    
-    if (!updateResetTracker(frame.ID, frame.NumberOfResets, frame.Consumption, &lastResets, &lastConsumption)) {
-      // Consumption check
-      double delta = frame.Consumption - lastConsumption;
-      if (delta < 0 || delta > 0.025) {
-        valid = false;
-        reason += "Consumption invalid (last=" + String(lastConsumption, 3) + ", delta=" + String(delta, 3) + "); ";
-      }
+    //   reason += "Resets not same or +1 (last=" + String(lastResets) + "); ";
+    // }
+
+    double lastConsumption;
+    if (!checkConsumption(frame.ID, frame.Consumption, &lastConsumption)) {
+      valid = false;
+      reason += "Consumption invalid (last=" + String(lastConsumption, 3) + "); ";
     }
 
     // Logging logic
@@ -484,6 +867,15 @@ void loop() {
 
     // MQTT publish only valid packets
     if (valid) {
+      // Dim flash for valid packet
+      ledcWrite(LED_PIN, LED_VALID_BRIGHTNESS);
+      ledValidOnTime = millis();
+      ledValidIsOn = true;
+      ledInvalidIsOn = false;  // Cancel any invalid flash
+      // Update display page when valid data received
+      updateDisplayPage(frame.ID, frame.Power, frame.Consumption);
+      drawDisplay();
+
       char topic[32];
       char payload[256];
       snprintf(topic, sizeof(topic), "EC3000/%04X", frame.ID);
@@ -491,9 +883,35 @@ void loop() {
                "{\"TotalSeconds\":%lu,\"OnSeconds\":%lu,\"Consumption\":%.3f,\"Power\":%.1f,\"MaximumPower\":%.1f,\"NumberOfResets\":%u,\"IsOn\":%d,\"CRC\":\"0x%04X\",\"RSSI\":%.2f}",
                frame.TotalSeconds, frame.OnSeconds, frame.Consumption, frame.Power, frame.MaximumPower, frame.NumberOfResets, frame.IsOn, frame.CRC, rssi);
       client.publish(topic, payload);
+    } else {
+      // Full brightness for invalid packet
+      ledcWrite(LED_PIN, LED_INVALID_BRIGHTNESS);  // Full brightness
+      ledInvalidOnTime = millis();
+      ledInvalidIsOn = true;
+      ledValidIsOn = false;  // Cancel any valid flash
+      Serial.println("Invalid packet received - LED ON (full)");
     }
 
-    WriteReg(REG_IRQFLAGS2, 0x04);
+    WriteReg(0x28, 0x04);
     m_payloadReady = false;
+  }
+
+  // Turn LED off after respective durations
+  if (ledValidIsOn && millis() - ledValidOnTime >= LED_VALID_DURATION) {
+    ledcWrite(LED_PIN, 255);  // Off for active-low
+    ledValidIsOn = false;
+    // Serial.println("LED OFF (valid)");
+  }
+  if (ledInvalidIsOn && millis() - ledInvalidOnTime >= LED_INVALID_DURATION) {
+    ledcWrite(LED_PIN, 255);  // Off for active-low
+    ledInvalidIsOn = false;
+    // Serial.println("LED OFF (invalid)");
+  }
+
+  // Periodically refresh display to maintain loading bar animation
+  static unsigned long lastDisplayUpdate = 0;
+  if (millis() - lastDisplayUpdate > 100) {
+    drawDisplay();
+    lastDisplayUpdate = millis();
   }
 }
