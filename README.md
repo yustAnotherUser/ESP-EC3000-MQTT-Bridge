@@ -3,19 +3,19 @@ Empfängt EC3000-Pakete und dekodiert sie über einen RFM69, der mit einem ESP82
 ---
 Receives EC3000 packets and decodes them via a RFM69 connected to an ESP8266/ESP32 and sends them to MQTT after some sanity checks.
 
-Volle Unterstützung des ESP32-C3 mit verbautem 0,42" OLED, der blauen LED und des "BO0"-Tasters mit zwei Funktionen.
+Volle Unterstützung des ESP32-C3 mit verbautem 0,42" OLED, der blauen LED und des "BO0"-Tasters mit zwei Funktionen.<br>
 - Kurz drücken: Wechselt zur nächsten ID
-- Länger als halbe Sekunde drücken: Wechselt die Schriftart der Anzeige! (aktuell 37 mehr oder minder zufällig ausgewählte aus den hunderten verfügbaren)
+- Länger als halbe Sekunde drücken: Wechselt die Schriftart der Anzeige! (aktuell 37 mehr oder minder zufällig ausgewählte aus den hunderten verfügbaren, kann einfach im Array angepasst werden)
 
 Die LED leuchtet minimal für einen sehr kurzen Zeitraum wenn ein Paket in Ordnung ist und länger und stärker wenn ein Paket nicht in Ordnung ist.
 
-Dass OLED zeigt in drei Zeilen:
-1234 ID
-Ein 1 Pixel breiter horizontaler "Ladebalken" der fünf Sekunden braucht (dass nicht veränderbare Intervall eines Senders zwischen den Paketen) und "neustartet" sobald dass nächste Paket da ist. (Wenn er am Ende stehenbleibt bedeutet das, dass er das nächste Paket komplett verpasst hat und wird daher solange am Ende stehen bis wieder ein Paket eintrifft)
-123,4 W
-12,345 KWH
+Dass OLED zeigt in drei Zeilen:<br>
+1234 ID<br>
+Ein 1 Pixel breiter horizontaler "Ladebalken" der fünf Sekunden braucht (dass nicht veränderbare Intervall eines Senders zwischen den Paketen) und "neustartet" sobald dass nächste Paket da ist. (Wenn er am Ende stehenbleibt bedeutet das, dass er das nächste Paket komplett verpasst hat und wird daher solange am Ende stehen bis wieder ein Paket eintrifft)<br>
+123,4 W<br>
+12,345 KWH<br><br>
 
-!! Ihr müsst eure WLAN und MQTT Daten im Quellcode eingeben !!
+!! Ihr müsst eure WLAN und MQTT Daten im Quellcode eingeben !!<br><br>
 
 MQTT Struktur:<br>
 EC3000/debug		-> Removing stale ID (Durch fehlerhafte Pakete werden evtl. IDs erkannt die es nicht gibt welche aber sofort einen Platz im internen Tracker einnehmen.
