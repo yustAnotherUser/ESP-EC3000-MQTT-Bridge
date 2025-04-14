@@ -3,12 +3,12 @@
 #pragma once
 
 const char* whitelist[] = {
-  "7821",  // 3D-Drucker
-  "531C",  // Waschmaschine & Geschirrspüler
-  "7E3A"   // Kühlschrank
-  "770C"    // E-Bike
-  "7E65"    // Monitor
-  "51D2"    // Total
+  "DEAD",  // 3D-Drucker
+  "BEEF",  // Waschmaschine & Geschirrspüler
+  "1234",   // Kühlschrank
+  "5678",    // E-Bike
+  "90AB",    // Monitor
+  "CDEF"    // Total
 };
 
 const int whitelistSize = sizeof(whitelist) / sizeof(whitelist[0]);
