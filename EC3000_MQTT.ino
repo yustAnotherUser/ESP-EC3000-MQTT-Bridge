@@ -589,7 +589,7 @@ void drawDisplay() {
   }
 
   u8g2.sendBuffer();
-  Serial.println("Drawing page: " + String(totalPages ? currentPage : -1));
+  // Serial.println("Drawing page: " + String(totalPages ? currentPage : -1));
 }
 
 
