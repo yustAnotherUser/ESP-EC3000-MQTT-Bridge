@@ -3,15 +3,26 @@
 #include <PubSubClient.h>
 #include <U8g2lib.h>
 
+#include "wifidata.h"
+#include "whitelist.h"
+// #include "pins.h"
+#include "fonts.h"
+
 // benutzte Pins auf ESP32-C3 Board mit 0.42" OLED
-// https://www.aliexpress.com/item/1005008125231916.html
-// oder suche "ESP32-C3 oled 0 42"
 // (nur zur Übersicht; werden später im Code initialisiert)
 //
 // PIN 5 ist SDA; I2C; Display (und evtl. sonstige I2C Sensoren)
 // PIN 6 ist SCL; I2C; Display (und evtl. sonstige I2C Sensoren)
 // PIN 8 ist die LED auf der Platine (blau auf den günstigen AliExpress Boards und an PIN 8; es gibt wohl auch welche mit einer RGB LED an PIN 2?)
 // PIN 9 ist der "BO0" Knopf
+
+// // Pin Definitionen RFM69 an ESP32-S2
+// #define RFM69_CS   34  // NSS (Chip Select)
+// #define RFM69_INT  5   // DIO0 (Interrupt)
+// #define RFM69_MOSI 35  // SPI MOSI
+// #define RFM69_MISO 37  // SPI MISO
+// #define RFM69_SCK  36  // SPI SCK
+// #define RFM69_RST  18  // RESET pin
 
 // Pin Definitionen RFM69 (frei wählbar) an ESP32-C3 mit 0,42" OLED
 #define RFM69_CS 7
@@ -20,16 +31,15 @@
 #define RFM69_SCK 4
 #define RFM69_RST 2
 
-// Hersteller Pin Definitionen 0.42" OLED auf dem günstigen ESP32-C3 Board
-#define OLED_SCL 6  // (fest auf der Platine zum Display verdrahtet)
-#define OLED_SDA 5  // (fest auf der Platine zum Display verdrahtet)
+// Hersteller Pin Definitionen am günstigen ESP32-C3 Board mit verbautem 0.42" 72x40 OLED
+#define OLED_SCL 6  // https://www.aliexpress.com/item/1005008125231916.html
+#define OLED_SDA 5  // oder suche "ESP32-C3 oled 0 42"
 
-// Hersteller Pin Definitionen der auf dem Board verbauten LED
-#define LED_PIN 8                 // (fest auf der Platine verdrahtet)
+#define LED_PIN 8     // (fest auf der Platine verdrahtet)
+#define BUTTON_PIN 9  // (fest auf der Platine verdrahtet)
 
-// LED Eigenschaften
 #define LED_VALID_DURATION 3      // 3ms for valid packets
-#define LED_INVALID_DURATION 60   // 10ms for invalid packets
+#define LED_INVALID_DURATION 100  // 100ms for invalid packets
 #define LED_VALID_BRIGHTNESS 250  // ~2% brightness for valid (0 = brightest, 255 = off)
 #define LED_INVALID_BRIGHTNESS 0  // Full brightness for invalid
 #define LED_PWM_FREQ 5000         // 5kHz PWM frequency
@@ -41,20 +51,18 @@
 #define PAYLOAD_SIZE 47
 #define FRAME_LENGTH 38
 
-// Behandlung des "BO0" Knopfes
-#define LONG_PRESS_DURATION 500   // 500ms for font change
-
-// Anzeigelänge des Popups beim Fontwechsel
+// Knopf Behandlung
+#define FONT_PRESS_DURATION 500   // 500ms for font cycle
+#define LONG_PRESS_DURATION 2000  // 2s to start auto-cycling through all IDs
 #define FONT_POPUP_DURATION 1250  // 1250ms popup with the current font array number
 
-// WiFi and MQTT settings (EDIT THESE)
-const char* ssid = "YOURWIFI";
-const char* password = "YOURWIFIPASSWORD";
-const char* mqtt_server = "192.168.0.254";
-const int mqtt_port = 1883;
-const char* mqtt_user = ""; // put your mqtt username here
-const char* mqtt_password = ""; // put your mqtt password here
+#define AUTO_CYCLE_INTERVAL 5000  // Anzeigedauer pro ID
 
+// only used for LAYOUT 2 !
+#define LOADING_BAR_WIDTH 2  // Vertical bar width
+#define ID_GAP 1             // Gap between bar and ID
+
+// Ab hier nichts mehr ändern außer du bist dir absolut sicher
 // Global variables for LED timing
 unsigned long ledValidOnTime = 0;
 unsigned long ledInvalidOnTime = 0;
@@ -64,6 +72,10 @@ bool ledInvalidIsOn = false;
 // Fontcounter popup
 unsigned long fontPopupStart = 0;  // Popup timer
 bool showFontPopup = false;        // Popup state
+
+// Auto-cycle
+bool autoCycle = true;            // Auto-cycle state
+unsigned long lastCycleTime = 0;  // Auto-cycle timer
 
 // Display initialization
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE, 6, 5);
@@ -76,8 +88,8 @@ const unsigned int xOffset = (BufferWidth - ScreenWidth) / 2;
 const unsigned int yOffset = (BufferHeight - ScreenHeight) / 2;
 
 // Define constants and variables
-const int buttonPin = 9;                  // GPIO pin for the button
-const unsigned long debounceDelay = 250;  // Debounce delay in milliseconds
+// const int buttonPin = 9;                  // GPIO pin for the button
+// const unsigned long debounceDelay = 250;  // Debounce delay in milliseconds
 
 // Logging toggle
 bool logOnlyFailed = true;  // true = log only failed, false = log all
@@ -101,58 +113,10 @@ struct Frame {
   uint16_t CRC;
 };
 
-// Font array (modify as needed)
-// https://github.com/olikraus/u8g2/wiki/fntlist12#u8g2-fonts-capital-a-height-912
-const uint8_t* fonts[] = {
-  // unsorted
-  u8g2_font_ncenB10_tr,            // 0 - NULL !!!
-  u8g2_font_9x6LED_tr,             // 1
-  u8g2_font_spleen5x8_mu,          // 2
-  u8g2_font_NokiaSmallPlain_tf,    // 3
-  u8g2_font_BitTypeWriter_tr,
-  u8g2_font_PixelTheatre_tr,
-  u8g2_font_ImpactBits_tr,
-  u8g2_font_doomalpha04_tr,
-  u8g2_font_busdisplay11x5_tr,
-  u8g2_font_lastapprenticebold_tr,
-  u8g2_font_cube_mel_tr,           // 10
-  u8g2_font_press_mel_tr,
-  u8g2_font_repress_mel_tr,
-  u8g2_font_smart_patrol_nbp_tr,
-  u8g2_font_missingplanet_tr,
-  u8g2_font_ordinarybasis_tr,
-  u8g2_font_questgiver_tr,
-  u8g2_font_seraphimb1_tr,
-  u8g2_font_koleeko_tu,
-  u8g2_font_tenthinguys_tr,
-  u8g2_font_tenthinnerguys_tr,      // 20
-  u8g2_font_8bitclassic_tr,
-  u8g2_font_Terminal_tr,
-  // 10 high
-  u8g2_font_mademoiselle_mel_tr,
-  u8g2_font_pieceofcake_mel_tr,
-  u8g2_font_tenfatguys_tr,
-  u8g2_font_sonicmania_tr,
-  u8g2_font_DigitalDiscoThin_tr,
-  u8g2_font_DigitalDisco_tr,
-  u8g2_font_pxplusibmvga9_tr,
-  // 11 high
-  u8g2_font_michaelmouse_tu,         // 30
-  u8g2_font_squirrel_tr,
-  u8g2_font_fewture_tr,
-  u8g2_font_adventurer_tr,
-  u8g2_font_Pixellari_tr,
-  // 12 high
-  u8g2_font_cupcakemetoyourleader_tr,
-  u8g2_font_heavybottom_tr,
-  u8g2_font_12x6LED_tr,              // 37
-};
-const uint8_t numFonts = sizeof(fonts) / sizeof(fonts[0]);
-
-// Reset and Consumption tracking (max 64 devices)
-// designers note: make this far bigger as you have real IDs. like 15-20 times. you never know how bad your packet gets messed up in transmission and how many false IDs you may receive in a very short amount of time which would clog up the tracking if this is way to low...
+// Reset and Consumption tracking
+// designers note: make this far bigger as you have real IDs. like 10-20 times. you never know how bad your packet gets messed up in transmission and how many false IDs you may receive in a very short amount of time which would clog up the tracking if this is way to low...
 // keep in mind IDs that are not re-received within 132 seconds will be removed from the list anyways (as they are most likely false anyways) to keep it from the otherwise unevitable long time clog up.
-#define MAX_IDS 96
+#define MAX_IDS 80
 struct Tracker {
   uint16_t ID;
   uint16_t LastResets;
@@ -338,6 +302,7 @@ void reconnect() {
     String clientId = "ESP-EC3000-";
     clientId += String(random(0xffff), HEX);
     if (client.connect(clientId.c_str(), mqtt_user, mqtt_password)) {
+      client.publish("EC3000/debug", "EC3000 MQTT Bridge connected!");
       Serial.println("connected");
     } else {
       Serial.print("failed, rc=");
@@ -366,8 +331,8 @@ void printTimeBreakdown(uint32_t seconds) {
 }
 
 bool checkResets(uint16_t id, uint16_t resets, uint16_t* lastResets) {
-  // TODO: Does not work reliably AND WILL CAUSE MISSING DATA AT SOME POINT AND THEN FOREVER because of weird jumps the EC3000 makes sometimes.
-  // !! Make sure the Sanity check later is a comment (//) so this will not be used !!
+  // TODO: Does not work reliably AND WILL CAUSE MISSING DATA AT SOME POINT FOREVER because of wierd jump the EC3000 makes sometimes.
+  // !! Make sure the Sanity check later is a comment (//) so it will not be used !!
   unsigned long now = millis();
   for (int i = 0; i < MAX_IDS; i++) {
     if (trackers[i].Initialized && trackers[i].ID == id) {
@@ -394,6 +359,15 @@ bool checkResets(uint16_t id, uint16_t resets, uint16_t* lastResets) {
     }
   }
   debugLog("Too many IDs! Increase MAX_IDS.");
+  return false;
+}
+
+bool isWhitelisted(String id) {
+  for (int i = 0; i < whitelistSize; i++) {
+    if (id.equalsIgnoreCase(whitelist[i])) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -474,27 +448,99 @@ void updateDisplayPage(uint16_t id, float power, double consumption) {
   }
 }
 
+// DISPLAY LAYOUTS - USE ONLY ONE !
+// (check fonts.h for the Website with the names and a preview of the fonts.)
+//
+// // LAYOUT 1 - 3 Lines (ID, "Loading Bar", Power, Consumption)
+// void drawDisplay() {
+//   u8g2.clearBuffer();
+//   if (showFontPopup && millis() - fontPopupStart < FONT_POPUP_DURATION) {
+//     // Popup: show font index only
+//     u8g2.setFont(u8g2_font_fub30_tn);  // Large numeric font (~30px)
+//     char popup[3];
+//     snprintf(popup, sizeof(popup), "%d", currentFontIndex);
+//     int width = u8g2.getStrWidth(popup);
+//     int height = u8g2.getFontAscent() - u8g2.getFontDescent();
+//     int x = xOffset + (ScreenWidth - width) / 2;    // Center horizontally
+//     int y = yOffset + (ScreenHeight - height) / 2;  // Center vertically
+//     u8g2.setCursor(x, y);
+//     u8g2.print(popup);
+//     Serial.println("Drawing popup: " + String(popup));
+//   } else {
+//     // Normal display
+//     showFontPopup = false;  // Hide popup after 3s
+//     u8g2.setFont(fonts[currentFontIndex]);
+//     if (totalPages == 0) {
+//       u8g2.setCursor(xOffset, yOffset);
+//       u8g2.print("...");  // Show that we are still Waiting for the very first packets ... only seen at system startup until the first packet comes in
+//     } else {
+//       // Find the actual page index
+//       int displayIndex = 0;
+//       for (int i = 0, count = 0; i < MAX_IDS; i++) {
+//         if (displayPages[i].active) {
+//           if (count == currentPage) {
+//             displayIndex = i;
+//             break;
+//           }
+//           count++;
+//         }
+//       }
+//       // Calculate loading bar progress (5 seconds total)
+//       unsigned long elapsed = millis() - displayPages[displayIndex].lastUpdate;
+//       int barWidth = (elapsed * ScreenWidth) / 5000;
+//       if (barWidth > ScreenWidth) {
+//         barWidth = ScreenWidth;
+//       }
+
+//       // Draw content with current font
+//       u8g2.setFont(fonts[currentFontIndex]);
+//       char buffer[20];
+
+//       // ID
+//       snprintf(buffer, sizeof(buffer), "%04X ID", displayPages[displayIndex].ID);
+//       u8g2.setCursor(xOffset, yOffset);
+//       u8g2.print(buffer);
+
+//       // Loading bar
+//       u8g2.drawHLine(xOffset, yOffset + 13, barWidth);
+
+//       // Power
+//       snprintf(buffer, sizeof(buffer), "%.1f W", displayPages[displayIndex].Power);
+//       u8g2.setCursor(xOffset, yOffset + 14);
+//       u8g2.print(buffer);
+
+//       // Consumption
+//       snprintf(buffer, sizeof(buffer), "%.3f KWH", displayPages[displayIndex].Consumption);
+//       u8g2.setCursor(xOffset, yOffset + 28);
+//       u8g2.print(buffer);
+//     }
+//   }
+//   u8g2.sendBuffer();
+// }
+
+// LAYOUT 2 (Loading Bar on the very left vertically, ID besides it also vertically, big remaining space for the last two values; 2 lines on a 40px height display means therefore fonts up to in 20 pixels height)
 void drawDisplay() {
   u8g2.clearBuffer();
+
   if (showFontPopup && millis() - fontPopupStart < FONT_POPUP_DURATION) {
-    // Popup: show font index only
-    u8g2.setFont(u8g2_font_fub30_tn);  // Large numeric font (~30px)
+    u8g2.setFont(u8g2_font_fub30_tn);
     char popup[3];
     snprintf(popup, sizeof(popup), "%d", currentFontIndex);
     int width = u8g2.getStrWidth(popup);
     int height = u8g2.getFontAscent() - u8g2.getFontDescent();
-    int x = xOffset + (ScreenWidth - width) / 2;    // Center horizontally
-    int y = yOffset + (ScreenHeight - height) / 2;  // Center vertically
+    int x = xOffset + (ScreenWidth - width) / 2;
+    int y = yOffset + (ScreenHeight - height) / 2;
     u8g2.setCursor(x, y);
     u8g2.print(popup);
     Serial.println("Drawing popup: " + String(popup));
   } else {
-    // Normal display
-    showFontPopup = false;  // Hide popup after 3s
-    u8g2.setFont(fonts[currentFontIndex]);
+    showFontPopup = false;
+
     if (totalPages == 0) {
+      u8g2.setFont(fonts[currentFontIndex]);
+      u8g2.setFontDirection(0);
       u8g2.setCursor(xOffset, yOffset);
-      u8g2.print("...");  // Show that we are still Waiting for the very first packets ... only seen at system startup until the first packet comes in
+      u8g2.print("...");
     } else {
       // Find the actual page index
       int displayIndex = 0;
@@ -507,43 +553,50 @@ void drawDisplay() {
           count++;
         }
       }
-      // Calculate loading bar progress (5 seconds total)
+
+      // Vertical loading bar (column 0, top-to-bottom)
       unsigned long elapsed = millis() - displayPages[displayIndex].lastUpdate;
-      int barWidth = (elapsed * ScreenWidth) / 5000;
-      if (barWidth > ScreenWidth) {
-        barWidth = ScreenWidth;
+      int barHeight = (elapsed * ScreenHeight) / 5000;
+      if (barHeight > ScreenHeight) {
+        barHeight = ScreenHeight;
       }
+      u8g2.drawBox(xOffset, yOffset, LOADING_BAR_WIDTH, barHeight);
 
-      // Draw content with current font
+      // Vertical ID (fixed font, rotated)
+      // u8g2.setFont(u8g2_font_crox4tb_tr); // 13px height
+      u8g2.setFont(u8g2_font_10x20_tf);  // 13px height
+      u8g2.setFontDirection(3);          // 90° counterclockwise
+      char idBuffer[5];
+      snprintf(idBuffer, sizeof(idBuffer), "%04X", displayPages[displayIndex].ID);
+      u8g2.setCursor(xOffset + LOADING_BAR_WIDTH + ID_GAP, yOffset + 40);  // Adjust for text length
+      u8g2.print(idBuffer);
+
+      // Power and Consumption (swapped font, horizontal)
       u8g2.setFont(fonts[currentFontIndex]);
+      u8g2.setFontDirection(0);  // Back to horizontal
       char buffer[20];
-
-      // ID
-      snprintf(buffer, sizeof(buffer), "%04X ID", displayPages[displayIndex].ID);
-      u8g2.setCursor(xOffset, yOffset);
-      u8g2.print(buffer);
-
-      // Loading bar
-      u8g2.drawHLine(xOffset, yOffset + 13, barWidth);
 
       // Power
       snprintf(buffer, sizeof(buffer), "%.1f W", displayPages[displayIndex].Power);
-      u8g2.setCursor(xOffset, yOffset + 14);
+      u8g2.setCursor(xOffset + LOADING_BAR_WIDTH + ID_GAP + 20, yOffset + 0);
       u8g2.print(buffer);
 
       // Consumption
-      snprintf(buffer, sizeof(buffer), "%.3f KWH", displayPages[displayIndex].Consumption);
-      u8g2.setCursor(xOffset, yOffset + 28);
+      snprintf(buffer, sizeof(buffer), "%.3f kwh", displayPages[displayIndex].Consumption);
+      u8g2.setCursor(xOffset + LOADING_BAR_WIDTH + ID_GAP + 20, yOffset + 20);
       u8g2.print(buffer);
     }
   }
+
   u8g2.sendBuffer();
+  Serial.println("Drawing page: " + String(totalPages ? currentPage : -1));
 }
 
+
 void handleButton() {
-  int reading = digitalRead(buttonPin);
+  int reading = digitalRead(BUTTON_PIN);
   // Serial.print("Button reading: ");
-  // Serial.println(reading); // Show the button state (must be "1" !!!)
+  // Serial.println(reading);
 
   if (reading == LOW && lastButtonState == HIGH) {
     // Button just pressed
@@ -554,7 +607,13 @@ void handleButton() {
     // Button released
     unsigned long pressDuration = millis() - buttonPressStart;
     buttonIsPressed = false;
-    if (pressDuration < LONG_PRESS_DURATION) {
+
+    if (autoCycle) {
+      // Any press during auto-cycle stops it
+      autoCycle = false;
+      Serial.println("Button press - Stopping auto-cycle");
+      drawDisplay();
+    } else if (pressDuration < FONT_PRESS_DURATION) {
       // Short press: cycle page
       if (totalPages > 0) {
         currentPage = (currentPage + 1) % totalPages;
@@ -563,21 +622,28 @@ void handleButton() {
       } else {
         Serial.println("Short press - No pages to cycle");
       }
-    }
-    Serial.println("Button released - duration: " + String(pressDuration) + "ms");
-  } else if (buttonIsPressed && reading == LOW) {
-    // Button held
-    unsigned long pressDuration = millis() - buttonPressStart;
-    if (pressDuration >= LONG_PRESS_DURATION) {
-      // Long press: cycle font
+    } else if (pressDuration < LONG_PRESS_DURATION) {
+      // Medium press: cycle font
       currentFontIndex = (currentFontIndex + 1) % numFonts;
       fontPopupStart = millis();
       showFontPopup = true;
-      Serial.println("Long press - Cycling to font index: " + String(currentFontIndex));
+      Serial.println("Medium press - Cycling to font index: " + String(currentFontIndex));
       drawDisplay();
-      buttonIsPressed = false;  // Prevent repeat triggers
+    } else {
+      // Long press: start auto-cycle
+      if (totalPages > 0) {
+        autoCycle = true;
+        lastCycleTime = millis();
+        currentPage = 0;  // Start from first page
+        Serial.println("Long press - Starting auto-cycle");
+        drawDisplay();
+      } else {
+        Serial.println("Long press - No pages to auto-cycle");
+      }
     }
+    Serial.println("Button released - duration: " + String(pressDuration) + "ms");
   }
+
   lastButtonState = reading;
 }
 
@@ -620,14 +686,14 @@ void setup() {
   // Initialize display
   u8g2.begin();
   // u8g2.setFont(u8g2_font_8bitclassic_tr); // Set a readable font
-  u8g2.setFont(u8g2_font_missingplanet_tr);
+  // u8g2.setFont(u8g2_font_missingplanet_tr);
   // u8g2.setFont(u8g2_font_questgiver_tr);
-  // u8g2.setFont(u8g2_font_crox1tb_tr);
+  u8g2.setFont(u8g2_font_crox1tb_tr);
   // u8g2.setFont(u8g2_font_lastapprenticethin_tr);
   // u8g2.setFont(u8g2_font_eckpixel_tr);
   // u8g2.setFont(u8g2_font_tenthinnerguys_tr);
   // u8g2.setFont(u8g2_font_NokiaSmallBold_tr);
-  // u8g2.setFontRefHeightExtendedText();
+  u8g2.setFontRefHeightExtendedText();
   u8g2.setDrawColor(1);
   u8g2.setBusClock(25000000);
   u8g2.setFontPosTop();
@@ -638,14 +704,14 @@ void setup() {
   u8g2.print("EC3000 MQTT Bridge");
   u8g2.sendBuffer();
 
-  // Configure LED PWM with new ESP-IDE > v3 API (in short: it's now ledcAttach instead of ledcAttachSetup and ledcAttachPin)
+  // Configure LED PWM with new ESP-IDE > v3 API (in short: it's now a single ledcAttach instead of ledcSetup and ledcAttachPin or whatever it was called before and the ledcWrite now uses the pin and the value - simple)
   pinMode(LED_PIN, OUTPUT);
   ledcAttach(LED_PIN, LED_PWM_FREQ, LED_PWM_RESOLUTION);  // Auto-assigns channel
   ledcWrite(LED_PIN, 255);                                // Off for active-low
 
   Serial.begin(115200);
   // while (!Serial) delay(10); // umstritten
-  delay(1125);  // einfacher und zuverlässiger
+  delay(2000);  // einfacher und zuverlässiger
 
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -658,7 +724,8 @@ void setup() {
   u8g2.sendBuffer();
 
   client.setServer(mqtt_server, mqtt_port);
-
+  reconnect();
+  
   // Reset RFM69 ... if you don't have the cable connected to the RFM69 RESET pin it doesn't matter because it works anyways
   pinMode(RFM69_CS, OUTPUT);
   digitalWrite(RFM69_CS, HIGH);
@@ -670,7 +737,7 @@ void setup() {
   delay(10);
 
   // Add button pin setup
-  pinMode(buttonPin, INPUT_PULLUP);  // Configure Button Pin with internal pull-up resistor
+  pinMode(BUTTON_PIN, INPUT_PULLUP);  // Configure Button Pin with internal pull-up resistor
 
   // Initialize display pages
   for (int i = 0; i < MAX_IDS; i++) {
@@ -748,10 +815,15 @@ void setup() {
   WriteReg(0x01, (ReadReg(0x01) & 0xE3) | 0x10);
 
   Serial.println("RFM69 initialized successfully!");
-  client.publish("EC3000/debug", "EC3000 MQTT Bridge initialized successfully!");
   u8g2.setCursor(xOffset, yOffset + 28);
   u8g2.print("Found RFM69");
   u8g2.sendBuffer();
+
+  // Whitelist publish für HomeAssistant?
+  // for (int i = 0; i < whitelistSize; i++) {
+  //   uint16_t id = strtol(whitelist[i], nullptr, 16);  // Umwandlung von Hex-String zu uint16_t
+  //   publishDiscoveryMessages(id);
+  // }
 
   //Read back the register values and show the just set Frequency and Baudrate (this is/was for debug)
   uint8_t reg07 = ReadReg(0x07);
@@ -784,6 +856,14 @@ void loop() {
   cleanStaleIDs();
   handleButton();
 
+  // Auto-cycle pages
+  if (autoCycle && totalPages > 0 && millis() - lastCycleTime >= AUTO_CYCLE_INTERVAL) {
+    currentPage = (currentPage + 1) % totalPages;
+    lastCycleTime = millis();
+    Serial.println("Auto-cycle - Showing page: " + String(currentPage));
+    drawDisplay();
+  }
+
   if (ReadReg(0x28) & 0x04) {
     m_payloadPointer = 0;
     for (int i = 0; i < 64; i++) {
@@ -806,6 +886,15 @@ void loop() {
     // Sanity checks
     bool valid = true;
     String reason = "";
+
+    String idStr = String(frame.ID, HEX);  // wandelt z. B. 0xBF8C → "bf8c"
+    idStr.toUpperCase();                   // jetzt: "BF8C"
+
+    if (!isWhitelisted(idStr)) {
+      valid = false;
+      reason += "wrong ID" + idStr;
+      return;
+    }
 
     if (frame.OnSeconds > frame.TotalSeconds) {
       valid = false;
