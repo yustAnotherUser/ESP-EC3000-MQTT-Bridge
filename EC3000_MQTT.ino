@@ -974,6 +974,13 @@ void loop() {
       client.publish(topic, payload);
     } else {
       // Send the bad packet to "EC3000/debug/bad" for possible further logging and analysis
+      // Send the reason(s) first and then the packet itself
+      char debtopic[32];
+      char debpayload[256];
+      snprintf(debtopic, sizeof(debtopic), "EC3000/debug/bad");
+      snprintf(debpayload, sizeof(debpayload), reason.c_str());
+      client.publish(debtopic, debpayload);
+
       char topic[32];
       char payload[256];
       snprintf(topic, sizeof(topic), "EC3000/debug/bad");
