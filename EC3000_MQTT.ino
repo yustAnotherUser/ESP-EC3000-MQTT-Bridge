@@ -973,6 +973,14 @@ void loop() {
                frame.TotalSeconds, frame.OnSeconds, frame.Consumption, frame.Power, frame.MaximumPower, frame.NumberOfResets, frame.IsOn, frame.CRC, rssi);
       client.publish(topic, payload);
     } else {
+      // Send the bad packet to "EC3000/debug/bad" for possible further logging and analysis
+      char topic[32];
+      char payload[256];
+      snprintf(topic, sizeof(topic), "EC3000/debug/bad");
+      snprintf(payload, sizeof(payload),
+               "{\"ID\":\"0x%04X\",\"TotalSeconds\":%lu,\"OnSeconds\":%lu,\"Consumption\":%.3f,\"Power\":%.1f,\"MaximumPower\":%.1f,\"NumberOfResets\":%u,\"IsOn\":%d,\"CRC\":\"0x%04X\",\"RSSI\":%.2f}",
+               frame.ID, frame.TotalSeconds, frame.OnSeconds, frame.Consumption, frame.Power, frame.MaximumPower, frame.NumberOfResets, frame.IsOn, frame.CRC, rssi);
+      client.publish(topic, payload);
       // Full brightness for invalid packet
       ledcWrite(LED_PIN, LED_INVALID_BRIGHTNESS);  // Full brightness
       ledInvalidOnTime = millis();
